@@ -6,22 +6,26 @@ file_path = "test_data.xlsx"
 LOCAL_API_URL = "http://localhost:8080/stocks.json"
 
 def fetch_all_local_prices():
-    """Fetches the JSON wall from your local Java server and turns it into a fast dictionary."""
+    """Fetches the JSON wall from your local Java server and extracts prices and percent changes."""
     try:
         response = requests.get(LOCAL_API_URL, timeout=5)
         
         if response.status_code == 200:
             data = response.json()
-            # Phisix stores the list of companies inside a 'stocks' key
             stocks_list = data.get('stocks', [])
             
-            # Create a clean dictionary mapped as { "URC": 120.5, "BDO": 150.0 }
             price_map = {}
             for stock in stocks_list:
                 symbol = stock.get("symbol")
                 price = stock.get("price", {}).get("amount")
+                # Exactly matches the JSON camelCase spelling
+                percent_change = stock.get("percentChange") 
+                
                 if symbol and price is not None:
-                    price_map[symbol] = float(price)
+                    price_map[symbol] = {
+                        "price": float(price),
+                        "change": float(percent_change) if percent_change is not None else 0.0
+                    }
                     
             return price_map
         else:
@@ -36,32 +40,35 @@ def fetch_all_local_prices():
         print(f"Unexpected error fetching local data: {e}")
         return None
 
+# --- THE EXECUTION LOGIC ---
 try:
-    # 1. Grab all prices from your local server at once
     print("Connecting to local Java microservice...")
-    live_prices = fetch_all_local_prices()
+    live_data = fetch_all_local_prices()
     
-    if live_prices:
-        # 2. Open the Excel file
+    if live_data:
         workbook = openpyxl.load_workbook(file_path)
         sheet = workbook['RawData'] if 'RawData' in workbook.sheetnames else workbook.active
             
         print("Workbook loaded. Updating watchlist...")
         today_str = datetime.now().strftime("%Y-%m-%d")
 
-        # 3. Match the watchlist to the local data
         for row in range(2, sheet.max_row + 1):
             cell_value = sheet.cell(row=row, column=3).value
             
             if cell_value:
                 ticker_str = str(cell_value).strip()
                 
-                # Instantly look up the price in our dictionary
-                if ticker_str in live_prices:
-                    price = live_prices[ticker_str]
+                if ticker_str in live_data:
+                    stock_info = live_data[ticker_str]
+                    price = stock_info["price"]
+                    pct_change = stock_info["change"]
+                    
+                    # Write Date (Col A), Price (Col D), and Percent Change (Col E)
                     sheet.cell(row=row, column=1, value=today_str)
                     sheet.cell(row=row, column=4, value=price)
-                    print(f"Updated row {row}: {ticker_str} -> {price:.2f} PHP (via Local API)")
+                    sheet.cell(row=row, column=5, value=pct_change)
+                    
+                    print(f"Updated row {row}: {ticker_str} -> {price:.2f} PHP | {pct_change:.2f}%")
                 else:
                     print(f"Skipped {ticker_str}: Not found in local database.")
 
