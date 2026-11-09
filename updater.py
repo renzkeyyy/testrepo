@@ -18,7 +18,6 @@ def fetch_all_local_prices():
             for stock in stocks_list:
                 symbol = stock.get("symbol")
                 price = stock.get("price", {}).get("amount")
-                # Exactly matches the JSON camelCase spelling
                 percent_change = stock.get("percentChange") 
                 
                 if symbol and price is not None:
@@ -47,13 +46,30 @@ try:
     
     if live_data:
         workbook = openpyxl.load_workbook(file_path)
-        sheet = workbook['RawData'] if 'RawData' in workbook.sheetnames else workbook.active
+        raw_sheet = workbook['RawData'] if 'RawData' in workbook.sheetnames else workbook.active
+        
+        # Ensure History tab exists
+        if 'History' not in workbook.sheetnames:
+            history_sheet = workbook.create_sheet('History')
+            history_sheet.append(["Date", "Company Name", "Ticker Symbol", "Last Traded price", "Percent Change"])
+        else:
+            history_sheet = workbook['History']
             
-        print("Workbook loaded. Updating watchlist...")
+        print("Workbook loaded. Updating RawData and checking History...\n")
         today_str = datetime.now().strftime("%Y-%m-%d")
 
-        for row in range(2, sheet.max_row + 1):
-            cell_value = sheet.cell(row=row, column=3).value
+        # Create a memory bank of already logged (Date, Ticker) pairs to prevent same-day duplicates
+        logged_entries = set()
+        for row in range(2, history_sheet.max_row + 1):
+            hist_date = history_sheet.cell(row=row, column=1).value
+            hist_ticker = history_sheet.cell(row=row, column=3).value
+            if hist_date and hist_ticker:
+                logged_entries.add((str(hist_date).strip(), str(hist_ticker).strip()))
+
+        # Process the watchlist
+        for row in range(2, raw_sheet.max_row + 1):
+            company_name = raw_sheet.cell(row=row, column=2).value
+            cell_value = raw_sheet.cell(row=row, column=3).value
             
             if cell_value:
                 ticker_str = str(cell_value).strip()
@@ -62,13 +78,19 @@ try:
                     stock_info = live_data[ticker_str]
                     price = stock_info["price"]
                     pct_change = stock_info["change"]
+                    company_str = str(company_name) if company_name else ""
                     
-                    # Write Date (Col A), Price (Col D), and Percent Change (Col E)
-                    sheet.cell(row=row, column=1, value=today_str)
-                    sheet.cell(row=row, column=4, value=price)
-                    sheet.cell(row=row, column=5, value=pct_change)
+                    # ACTION A: Always overwrite the daily snapshot in RawData
+                    raw_sheet.cell(row=row, column=1, value=today_str)
+                    raw_sheet.cell(row=row, column=4, value=price)
+                    raw_sheet.cell(row=row, column=5, value=pct_change)
                     
-                    print(f"Updated row {row}: {ticker_str} -> {price:.2f} PHP | {pct_change:.2f}%")
+                    # ACTION B: Append to History ONLY IF this ticker hasn't been logged today
+                    if (today_str, ticker_str) not in logged_entries:
+                        history_sheet.append([today_str, company_str, ticker_str, price, pct_change])
+                        print(f"Logged {ticker_str}: {price:.2f} PHP (New Trading Day)")
+                    else:
+                        print(f"Updated RawData only (History already has {ticker_str} for {today_str})")
                 else:
                     print(f"Skipped {ticker_str}: Not found in local database.")
 
